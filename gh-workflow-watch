@@ -9,7 +9,7 @@ set -euo pipefail
 
 print_usage() {
   cat <<'EOF'
-Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [--exit-status] [<workflow-name>]
+Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [--exit-status] [--notify] [<workflow-name>]
 
 Arguments:
   <workflow-name>           Name of the workflow (as shown by 'gh workflow list')
@@ -21,6 +21,7 @@ Options:
   -b, --branch <branch>     Filter runs by branch
   -f, --file <file-path>    Specify workflow by file path (e.g., .github/workflows/ci.yml) instead of name
       --exit-status         Exit with non-zero status if run fails or is cancelled
+      --notify             Send desktop notification when workflow completes
   -h, --help                Show this help message
 
 Environment:
@@ -33,14 +34,42 @@ Examples:
   gh workflow-watch --file .github/workflows/ci.yml
   gh workflow-watch -R bellingcat/toolkit # Interactive selection
   GH_REPO=cli/cli gh workflow-watch "CI"
+  gh workflow-watch --notify build # Get desktop notification when done
 EOF
 }
 
 repo_flag=()
 branch_flag=()
 exit_status_flag=()
+notify_flag=false
 workflow_name=""
 workflow_file=""
+
+# Function to send desktop notifications
+send_notification() {
+  local title="$1"
+  local message="$2"
+
+  # macOS - using osascript (AppleScript)
+  if [[ "$(uname)" == "Darwin" ]]; then
+    osascript -e "display notification \"$message\" with title \"$title\""
+
+  # Linux - using notify-send (requires libnotify)
+  elif [[ "$(uname)" == "Linux" ]]; then
+    if command -v notify-send >/dev/null 2>&1; then
+      notify-send "$title" "$message"
+    else
+      echo "Warning: notify-send not found. Install libnotify-bin for notifications on Linux." >&2
+    fi
+
+  # Windows - using PowerShell (Windows 10+)
+  elif [[ "$(uname -o)" == "Msys" ]] || [[ "$(uname -o)" == "Cygwin" ]]; then
+    powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('$message', '$title')"
+
+  else
+    echo "Warning: Desktop notifications not supported on this platform" >&2
+  fi
+}
 
 # If GH_REPO is set, use it as default unless overridden later
 if [[ -n "${GH_REPO:-}" ]]; then
@@ -76,6 +105,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --exit-status)
       exit_status_flag=(--exit-status)
+      shift
+      ;;
+    --notify)
+      notify_flag=true
       shift
       ;;
     -h|--help)
@@ -178,6 +211,35 @@ else
 fi
 
 echo "Watching workflow '$workflow_name' (run $run_id)..." >&2
+
 # Watch the run until completion
 # --exit-status returns non-zero on failure if requested
 gh run watch "${repo_flag[@]}" "$run_id" "${exit_status_flag[@]}"
+
+# If notifications are enabled, send one after completion
+if [[ "$notify_flag" == "true" ]]; then
+  # Get the conclusion of the completed run
+  conclusion=$(gh run view "${repo_flag[@]}" "$run_id" --json conclusion --jq '.conclusion' 2>/dev/null || echo "unknown")
+
+  # Map conclusion to user-friendly status
+  case "$conclusion" in
+    "success")
+      status="✅ Success"
+      ;;
+    "failure")
+      status="❌ Failed"
+      ;;
+    "cancelled")
+      status="⚠️  Cancelled"
+      ;;
+    "skipped")
+      status="⏭️  Skipped"
+      ;;
+    *)
+      status="❓ $conclusion"
+      ;;
+  esac
+
+  # Send notification
+  send_notification "GitHub Workflow Completed" "$workflow_name: $status"
+fi

@@ -55,6 +55,9 @@ gh run watch "$run_id" --exit-status
 
 # Resolve workflow file path to workflow name
 gh workflow list --json id,name,path --jq ".[] | select(.path == \"$workflow_file\") | .name"
+
+# Get run conclusion for notifications
+gh run view "$run_id" --json conclusion --jq '.conclusion'
 ```
 
 ## Implementation Guidelines
