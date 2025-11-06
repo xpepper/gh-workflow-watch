@@ -2,17 +2,19 @@
 set -euo pipefail
 
 # gh extension: workflow-watch
-# Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] <workflow-name>
+# Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [<workflow-name>]
 # Watches the latest run of the given workflow until completion.
+# If no workflow name is provided, shows interactive picker for running workflows.
 # Exits with the run's conclusion status code when using --exit-status.
 
 print_usage() {
   cat <<'EOF'
-Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [--exit-status] <workflow-name>
+Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [--exit-status] [<workflow-name>]
 
 Arguments:
   <workflow-name>           Name of the workflow (as shown by 'gh workflow list')
                             Or use --file to specify workflow by file path
+                            If not provided, shows interactive picker for running workflows
 
 Options:
   -R, --repo <owner/repo>   Repository to use (defaults to current repo if in a git directory)
@@ -29,6 +31,7 @@ Examples:
   gh workflow-watch -R cli/cli test
   gh workflow-watch --branch develop build
   gh workflow-watch --file .github/workflows/ci.yml
+  gh workflow-watch -R bellingcat/toolkit # Interactive selection
   GH_REPO=cli/cli gh workflow-watch "CI"
 EOF
 }
@@ -103,28 +106,75 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$workflow_name" && -z "$workflow_file" ]]; then
-  echo "Error: workflow name or file path required" >&2
-  echo >&2 "Use --help for usage"
-  exit 1
-fi
-
-# If workflow file is specified, resolve it to workflow name
-if [[ -n "$workflow_file" ]]; then
-  workflow_name=$(gh workflow list "${repo_flag[@]}" --json id,name,path --jq ".[] | select(.path == \"$workflow_file\") | .name" | head -n 1)
-  if [[ -z "$workflow_name" || "$workflow_name" == "null" ]]; then
-    echo "No workflow found for file '$workflow_file'" >&2
-    echo "Tip: list workflows with: gh workflow list ${repo_flag[*]} --json id,name,path" >&2
+  # Interactive workflow selection mode
+  echo "Fetching running workflows..." >&2
+  # Get running workflows (status: in_progress, queued, requested)
+  running_workflows=$(gh run list "${repo_flag[@]}" "${branch_flag[@]}" --json name,databaseId,status --jq '.[] | select(.status == "in_progress" or .status == "queued" or .status == "requested") | {name, databaseId, status}' 2>/dev/null)
+  
+  if [[ -z "$running_workflows" || "$running_workflows" == "null" ]]; then
+    echo "No running workflows found" >&2
+    echo "Tip: list all workflows with: gh run list ${repo_flag[*]}" >&2
     exit 1
   fi
-fi
-
-# Fetch latest run id for workflow
-run_id=$(gh run list "${repo_flag[@]}" "${branch_flag[@]}" -w "$workflow_name" -L 1 --json databaseId --jq '.[0].databaseId' || true)
-
-if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  echo "No runs found for workflow '$workflow_name'" >&2
-  echo "Tip: list workflows with: gh workflow list ${repo_flag[*]}" >&2
-  exit 1
+  
+  echo "$running_workflows" > /tmp/gh_workflow_runs_$$
+  
+  # Count workflows
+  count=$(echo "$running_workflows" | jq -s 'length')
+  echo "Found $count running workflows:" >&2
+  echo >&2
+  
+  # Display the workflows with numbers
+  i=1
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      workflow_name_temp=$(echo "$line" | jq -r '.name')
+      run_id_temp=$(echo "$line" | jq -r '.databaseId')
+      status_temp=$(echo "$line" | jq -r '.status')
+      printf '%2d. %s (run %s, status: %s)\n' "$i" "$workflow_name_temp" "$run_id_temp" "$status_temp" >&2
+      i=$((i+1))
+    fi
+  done < /tmp/gh_workflow_runs_$$
+  echo >&2
+  
+  # Get user selection
+  while true; do
+    read -p "Select a workflow to watch (1-$((i-1))): " selection
+    if [[ -n "$selection" && "$selection" =~ ^[0-9]+$ && "$selection" -ge 1 && "$selection" -lt "$i" ]]; then
+      break
+    else
+      echo "Invalid selection. Please enter a number between 1 and $((i-1))." >&2
+    fi
+  done
+  
+  # Get the selected workflow
+  selected_line=$(sed -n "${selection}p" /tmp/gh_workflow_runs_$$)
+  workflow_name=$(echo "$selected_line" | jq -r '.name')
+  run_id=$(echo "$selected_line" | jq -r '.databaseId')
+  
+  # Clean up
+  rm /tmp/gh_workflow_runs_$$
+  
+  echo "Selected workflow '$workflow_name' (run $run_id)" >&2
+else
+  # If workflow file is specified, resolve it to workflow name
+  if [[ -n "$workflow_file" ]]; then
+    workflow_name=$(gh workflow list "${repo_flag[@]}" --json id,name,path --jq ".[] | select(.path == \"$workflow_file\") | .name" | head -n 1)
+    if [[ -z "$workflow_name" || "$workflow_name" == "null" ]]; then
+      echo "No workflow found for file '$workflow_file'" >&2
+      echo "Tip: list workflows with: gh workflow list ${repo_flag[*]} --json id,name,path" >&2
+      exit 1
+    fi
+  fi
+  
+  # Fetch latest run id for workflow
+  run_id=$(gh run list "${repo_flag[@]}" "${branch_flag[@]}" -w "$workflow_name" -L 1 --json databaseId --jq '.[0].databaseId' || true)
+  
+  if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+    echo "No runs found for workflow '$workflow_name'" >&2
+    echo "Tip: list workflows with: gh workflow list ${repo_flag[*]}" >&2
+    exit 1
+  fi
 fi
 
 echo "Watching workflow '$workflow_name' (run $run_id)..." >&2
