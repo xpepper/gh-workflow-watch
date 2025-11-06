@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh extension: workflow-watch
+# Usage: gh workflow-watch [-R owner/repo] <workflow-name>
+# Watches the latest run of the given workflow until completion.
+# Exits with the run's conclusion status code when using --exit-status.
+
+print_usage() {
+  cat <<'EOF'
+Usage: gh workflow-watch [-R owner/repo] [--exit-status] <workflow-name>
+
+Arguments:
+  <workflow-name>           Name of the workflow (as shown by 'gh workflow list')
+
+Options:
+  -R, --repo <owner/repo>   Repository to use (defaults to current repo if in a git directory)
+      --exit-status         Exit with non-zero status if run fails or is cancelled
+  -h, --help                Show this help message
+
+Environment:
+  GH_REPO                   If set, used as default for -R/--repo when not provided
+
+Examples:
+  gh workflow-watch build
+  gh workflow-watch -R cli/cli test
+  GH_REPO=cli/cli gh workflow-watch "CI"
+EOF
+}
+
+repo_flag=()
+exit_status_flag=()
+workflow_name=""
+
+# If GH_REPO is set, use it as default unless overridden later
+if [[ -n "${GH_REPO:-}" ]]; then
+  repo_flag=(-R "$GH_REPO")
+fi
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -R|--repo)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: missing value for $1" >&2
+        exit 1
+      fi
+      repo_flag=(-R "$2")
+      shift 2
+      ;;
+    --exit-status)
+      exit_status_flag=(--exit-status)
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    --) # end of flags
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown flag: $1" >&2
+      echo >&2 "Use --help for usage"
+      exit 1
+      ;;
+    *)
+      # first positional = workflow name
+      if [[ -z "$workflow_name" ]]; then
+        workflow_name="$1"
+        shift
+      else
+        echo "Unexpected extra argument: $1" >&2
+        echo >&2 "Use --help for usage"
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$workflow_name" ]]; then
+  echo "Error: workflow name required" >&2
+  echo >&2 "Use --help for usage"
+  exit 1
+fi
+
+# Fetch latest run id for workflow
+run_id=$(gh run list "${repo_flag[@]}" -w "$workflow_name" -L 1 --json databaseId --jq '.[0].databaseId' || true)
+
+if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+  echo "No runs found for workflow '$workflow_name'" >&2
+  echo "Tip: list workflows with: gh workflow list ${repo_flag[*]}" >&2
+  exit 1
+fi
+
+echo "Watching workflow '$workflow_name' (run $run_id)..." >&2
+# Watch the run until completion
+# --exit-status returns non-zero on failure if requested
+gh run watch "${repo_flag[@]}" "$run_id" "${exit_status_flag[@]}"
