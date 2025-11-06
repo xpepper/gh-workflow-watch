@@ -113,7 +113,6 @@ if [[ -z "$workflow_name" && -z "$workflow_file" ]]; then
   
   if [[ -z "$running_workflows" || "$running_workflows" == "null" ]]; then
     echo "No running workflows found" >&2
-    echo "Tip: list all workflows with: gh run list ${repo_flag[*]}" >&2
     exit 1
   fi
   
