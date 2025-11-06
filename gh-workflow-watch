@@ -121,7 +121,7 @@ if [[ -z "$workflow_name" && -z "$workflow_file" ]]; then
   
   # Count workflows
   count=$(echo "$running_workflows" | jq -s 'length')
-  echo "Found $count running workflows:" >&2
+  echo "Found $count running workflow(s):" >&2
   echo >&2
   
   # Display the workflows with numbers
@@ -137,9 +137,10 @@ if [[ -z "$workflow_name" && -z "$workflow_file" ]]; then
   done < /tmp/gh_workflow_runs_$$
   echo >&2
   
-  # Get user selection
+  # Get user selection with visual indicator
+  echo "Select a workflow to watch by entering its number:" >&2
   while true; do
-    read -p "Select a workflow to watch (1-$((i-1))): " selection
+    read -r -p "> " selection
     if [[ -n "$selection" && "$selection" =~ ^[0-9]+$ && "$selection" -ge 1 && "$selection" -lt "$i" ]]; then
       break
     else
