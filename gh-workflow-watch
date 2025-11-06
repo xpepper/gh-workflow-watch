@@ -2,20 +2,22 @@
 set -euo pipefail
 
 # gh extension: workflow-watch
-# Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] <workflow-name>
+# Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] <workflow-name>
 # Watches the latest run of the given workflow until completion.
 # Exits with the run's conclusion status code when using --exit-status.
 
 print_usage() {
   cat <<'EOF'
-Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--exit-status] <workflow-name>
+Usage: gh workflow-watch [-R owner/repo] [--branch branch-name] [--file workflow-file] [--exit-status] <workflow-name>
 
 Arguments:
   <workflow-name>           Name of the workflow (as shown by 'gh workflow list')
+                            Or use --file to specify workflow by file path
 
 Options:
   -R, --repo <owner/repo>   Repository to use (defaults to current repo if in a git directory)
   -b, --branch <branch>     Filter runs by branch
+  -f, --file <file-path>    Specify workflow by file path (e.g., .github/workflows/ci.yml) instead of name
       --exit-status         Exit with non-zero status if run fails or is cancelled
   -h, --help                Show this help message
 
@@ -26,6 +28,7 @@ Examples:
   gh workflow-watch build
   gh workflow-watch -R cli/cli test
   gh workflow-watch --branch develop build
+  gh workflow-watch --file .github/workflows/ci.yml
   GH_REPO=cli/cli gh workflow-watch "CI"
 EOF
 }
@@ -34,6 +37,7 @@ repo_flag=()
 branch_flag=()
 exit_status_flag=()
 workflow_name=""
+workflow_file=""
 
 # If GH_REPO is set, use it as default unless overridden later
 if [[ -n "${GH_REPO:-}" ]]; then
@@ -57,6 +61,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       branch_flag=(-b "$2")
+      shift 2
+      ;;
+    -f|--file)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: missing value for $1" >&2
+        exit 1
+      fi
+      workflow_file="$2"
       shift 2
       ;;
     --exit-status)
@@ -90,10 +102,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$workflow_name" ]]; then
-  echo "Error: workflow name required" >&2
+if [[ -z "$workflow_name" && -z "$workflow_file" ]]; then
+  echo "Error: workflow name or file path required" >&2
   echo >&2 "Use --help for usage"
   exit 1
+fi
+
+# If workflow file is specified, resolve it to workflow name
+if [[ -n "$workflow_file" ]]; then
+  workflow_name=$(gh workflow list "${repo_flag[@]}" --json id,name,path --jq ".[] | select(.path == \"$workflow_file\") | .name" | head -n 1)
+  if [[ -z "$workflow_name" || "$workflow_name" == "null" ]]; then
+    echo "No workflow found for file '$workflow_file'" >&2
+    echo "Tip: list workflows with: gh workflow list ${repo_flag[*]} --json id,name,path" >&2
+    exit 1
+  fi
 fi
 
 # Fetch latest run id for workflow

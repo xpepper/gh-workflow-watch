@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project Overview
-This is a GitHub CLI extension (written in Bash) that watches GitHub Actions workflow runs by name. The entire extension is a single executable script `gh-workflow-watch` (no file extension) that acts as a wrapper around `gh run list` and `gh run watch`.
+This is a GitHub CLI extension (written in Bash) that watches GitHub Actions workflow runs by name or file path. The entire extension is a single executable script `gh-workflow-watch` (no file extension) that acts as a wrapper around `gh run list` and `gh run watch`.
 
 ## Architecture & Key Files
 - **Extension naming convention**: File is named `gh-workflow-watch` (with hyphen). When installed, it's invoked as `gh workflow-watch` (space replaces hyphen per GitHub CLI convention).
@@ -52,6 +52,9 @@ gh run list -w "$workflow_name" -L 1 --json databaseId --jq '.[0].databaseId'
 
 # Watch a specific run
 gh run watch "$run_id" --exit-status
+
+# Resolve workflow file path to workflow name
+gh workflow list --json id,name,path --jq ".[] | select(.path == \"$workflow_file\") | .name"
 ```
 
 ## Implementation Guidelines
